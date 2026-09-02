@@ -1,0 +1,94 @@
+name: Codex Task Dispatch
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  dispatch:
+    # ChatGPT-created implementation tasks carry this marker.
+    if: contains(github.event.issue.body, '<!-- codex-task -->')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Create task branch
+        run: |
+          git checkout -b "codex/issue-${{ github.event.issue.number }}"
+
+      - name: Run Codex
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: |
+            Read .github/codex/prompts/task-runner.md before doing any work.
+
+            You are implementing GitHub issue #${{ github.event.issue.number }} in repository ${{ github.repository }}.
+
+            Issue title:
+            ${{ github.event.issue.title }}
+
+            Issue body:
+            ---
+            ${{ github.event.issue.body }}
+            ---
+
+            Implement the task exactly as specified. Do not commit, push, merge, or create a pull request.
+            Make changes in the current working tree and run the requested verification steps.
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          output-file: codex-output.md
+
+      - name: Publish Codex report to issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODEX_OUTPUT: ${{ steps.codex.outputs.final-message }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body-file <(printf '%s\n' "## Codex report" "" "$CODEX_OUTPUT")
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push implementation
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: implement issue #${{ github.event.issue.number }}"
+          git push --set-upstream origin "codex/issue-${{ github.event.issue.number }}"
+
+      - name: Open pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "codex/issue-${{ github.event.issue.number }}" \
+            --title "feat: implement #${{ github.event.issue.number }} — ${{ github.event.issue.title }}" \
+            --body "## Automated Codex implementation\n\nCloses #${{ github.event.issue.number }}\n\nCodex was dispatched automatically from the implementation-ready issue.\n\nReview the Codex report in the issue thread and verify the PR against its acceptance criteria."
+
+      - name: Report no implementation changes
+        if: steps.changes.outputs.changed == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "Codex completed without producing working-tree changes. The task may already be implemented or may be blocked; review the Codex report above."
