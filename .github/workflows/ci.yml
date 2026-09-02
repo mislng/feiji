@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  repository-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate control files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f AGENTS.md
+          test -f PROJECT.md
+          test -f ARCHITECTURE.md
+          test -f TASKS.md
+          test -f docs/product.md
+          test -f docs/decisions.md
+          test -f tasks/README.md
+          echo "AI team control center files are present."
